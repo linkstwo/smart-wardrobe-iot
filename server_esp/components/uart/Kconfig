@@ -1,0 +1,25 @@
+menu "UART Component Configuration"
+
+    # UART 组件配置项：
+    # 当前项目主要用 UART 把 ESP32 收到的云端衣柜命令转成 STM32 二进制帧。
+    # ACK 功能只是通用串口调试回执，不等同于 STM32 衣柜协议响应。
+
+    config UART_ENABLE_ACK
+        bool "Enable UART acknowledgement on data reception"
+        default n
+        help
+            是否在 UART 收到数据后自动回发 ACK。衣柜协议一般保持关闭，避免干扰 STM32 二进制帧。
+            When enabled, the UART component will send an acknowledgement
+            message back to the same UART port after receiving data.
+            The acknowledgement message is "OK\\n".
+
+    config UART_ACK_MESSAGE
+        string "UART acknowledgement message"
+        default "OK\\n"
+        depends on UART_ENABLE_ACK
+        help
+            自动 ACK 文本内容。只有 UART_ENABLE_ACK 打开时才会使用。
+            The message sent back to UART port after receiving data.
+            Include newline characters as needed.
+
+endmenu

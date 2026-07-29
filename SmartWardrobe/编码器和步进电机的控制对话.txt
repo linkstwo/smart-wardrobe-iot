@@ -1,0 +1,193 @@
+﻿编码器和步进电机的控制对话
+日期：2026-06-15
+项目路径：C:\Users\a1931\Desktop\SmartWardrobe(4)\SmartWardrobe
+
+一、用户原始问题
+
+用户多次提出：
+“接下来你只能在这个 C:\Users\a1931\Desktop\SmartWardrobe(4)\SmartWardrobe 文件夹修改，我想知道这套项目的程序的编码器和这些步进电机是怎么一起工作的，它们是怎么反馈的，有没有 PID 的程序。”
+
+二、本小姐检查项目后的结论
+
+这套项目是 STM32F407 的 Keil/CubeMX 工程，业务代码主要在 APP/，底层初始化主要在 Src/。
+
+结论很明确：
+1. 这套程序目前没有 PID 控制程序。
+2. 编码器反馈存在，但主要用于状态监测、到位急停、方向校验、卡滞保护。
+3. 普通电机运动大多是开环步进控制，不是连续闭环调速。
+4. M4 的 ENC_MOVE 和 M2 的 ABS_MOVE 属于“带反馈停止”的局部闭环，不是 PID 闭环。
+
+三、步进电机如何工作
+
+步进电机 M1~M5 由定时器输出 STEP 脉冲：
+- M1：TIM8
+- M2：TIM9
+- M3：TIM10
+- M4：TIM11
+- M5：TIM12
+
+方向 DIR 和使能 ENABLE 由 GPIO 控制。
+
+关键代码：
+- APP/Src/motor_hw.c
+- APP/Src/motor_ctrl.c
+
+电机控制层会把 RPM 换算成 STEP 频率：
+Hz = RPM * PPR / 60
+
+然后通过定时器 PWM 输出对应频率的脉冲。
+
+普通命令如：
+- M1 RUN DIR=CW RPM=120
+- M1 MOVE DIR=CCW RPM=120 STEP=2400
+- M1 RECIP DIR=CW RPM=100 STEP=1000 CYCLE=20
+
+这些主要依赖“输出了多少个脉冲”来判断动作，不依赖编码器修正电机位置。
+
+四、编码器如何工作
+
+EC1~EC5 使用 STM32 定时器编码器模式读取 A/B 相：
+- EC1：TIM1
+- EC2：TIM2
+- EC3：TIM3
+- EC4：TIM4
+- EC5：TIM5
+
+关键代码：
+- APP/Src/encoder_hw.c
+- APP/Src/encoder_ctrl.c
+
+EncoderCtrl_Tick1ms() 每 1ms 读取一次硬件计数，计算：
+- 累计计数 count_total
+- 当前方向 dir
+- 实测转速 rpm
+
+这些状态可以通过命令查询：
+- EC1 STATUS ~ EC5 STATUS
+- Mx ENC_STATUS
+- ALL ENC_STATUS
+
+五、编码器和步进电机怎么一起工作
+
+整体结构是两条链路：
+
+1. 电机链路
+串口命令 -> MotorCtrl -> MotorHw -> TIM PWM 输出 STEP -> 步进驱动器 -> 电机运动
+
+2. 编码器链路
+编码器 A/B 相或 RS485 绝对值编码器 -> EncoderHw / Rs485AbsEncoder -> EncoderCtrl / CmdDispatch -> 状态、到位判断、安全保护
+
+普通情况下，电机不会根据编码器误差实时调节 PWM 频率。
+
+也就是说：
+- 电机负责按命令跑；
+- 编码器负责观察实际有没有动、方向对不对、是否到位；
+- 到位或异常时，程序停止或急停电机。
+
+六、M4 的 EC4 闭环运动
+
+M4 有一个专门命令：
+M4 ENC_MOVE DIR=CW RPM=20 CNT=1440
+
+它的逻辑是：
+1. 读取 EC4 当前累计计数。
+2. 根据 DIR 和 CNT 算出目标计数。
+3. 让 M4 按固定 RPM 连续运行。
+4. 每 1ms 检查 EC4 编码器计数。
+5. 到达目标计数或进入容差范围后急停 M4。
+6. 如果编码器方向和电机命令方向相反，急停并报错。
+7. 如果长时间编码器计数不变化，认为卡滞，急停并报错。
+
+关键代码：
+- APP/Src/cmd_dispatch.c 中 CMD_ACTION_ENC_MOVE
+- APP/Src/cmd_dispatch.c 中 CmdDispatch_SafetyTick1ms()
+
+这属于“到位闭环”和“安全闭环”，不是 PID。
+
+七、M2 的 RS485 绝对值编码器运动
+
+M2 额外接了 BRT38-R0M1024-RT1 绝对值编码器，通过 UART2/RS485 读取。
+
+相关命令：
+- M2 ABS_STATUS
+- M2 ABS_ZERO
+- M2 ABS_MOVE DEG=90 RPM=20
+
+M2 ABS_MOVE 的逻辑是：
+1. 通过 Modbus RTU 读取绝对值编码器 RAW/DEG。
+2. 把目标角度 DEG 换算成 target_raw。
+3. 不指定方向时，自动选择较短方向。
+4. 让 M2 以固定 RPM 运行。
+5. 每 60ms 读取一次绝对值编码器。
+6. 到目标角度容差范围内就急停。
+7. 连续通信失败、方向反了、长时间不动，都会急停并报错。
+
+关键代码：
+- APP/Src/rs485_abs_encoder.c
+- APP/Src/cmd_dispatch.c 中 CMD_ACTION_ABS_MOVE
+- APP/Src/cmd_dispatch.c 中 CmdDispatch_SafetyTick1ms()
+
+这也是“按绝对编码器到位停止”，不是 PID。
+
+八、有没有 PID 程序
+
+确定性：确定没有。
+
+本小姐搜索了：
+- PID
+- pid
+- Kp
+- Ki
+- Kd
+- proportional
+- integral
+- derivative
+
+业务代码里没有 PID 参数，也没有比例、积分、微分计算，也没有根据误差连续调节输出频率的控制器。
+
+当前程序没有这种结构：
+error = target - encoder
+integral += error
+derivative = error - last_error
+output = Kp * error + Ki * integral + Kd * derivative
+
+所以这套程序不是 PID 闭环控制。
+
+九、需要特别注意的源码细节
+
+三轴 AXIS MOVE 文档里写得像“编码器步数坐标”，但源码里的 AxisCoord_Tick1ms() 实际是用电机输出脉冲 steps_total 更新 X/Y/Z 坐标，不是用 EncoderCtrl 的真实编码器计数。
+
+也就是说：
+- 三轴坐标目前更接近“命令脉冲累计坐标”；
+- 不是严格的“编码器实际位置坐标”。
+
+另外 AxisPlanner 里有 enc_err_max 和 ENCODER_MISMATCH 相关字段，但当前 Tick 逻辑没有真正执行“电机步数与编码器计数误差比较”的闭环保护。
+
+十、最终总结
+
+这套程序当前控制方式可以概括为：
+
+开环步进运动 + 编码器状态采样 + 局部到位急停 + 方向/卡滞/通信保护。
+
+不是：
+PID 闭环速度控制。
+
+也不是：
+完整伺服位置闭环控制。
+
+如果后续要做真正 PID，需要新增：
+1. 目标位置或目标速度输入。
+2. 编码器实际位置或速度反馈。
+3. 误差计算。
+4. PID 参数 Kp/Ki/Kd。
+5. 输出限幅和抗积分饱和。
+6. 将 PID 输出映射为步进频率或速度指令。
+7. 到位判定、误差保护、卡滞保护和调试曲线。
+
+十一、本次保存文件请求
+
+用户随后要求：
+“你把今天的这个对话框的内容生成本文文件，保存在这个文件夹里面并命名为‘编码器和步进电机的控制对话’。”
+
+本小姐根据该要求，在当前项目文件夹内创建本文本文件：
+编码器和步进电机的控制对话.txt

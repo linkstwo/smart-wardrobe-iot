@@ -1,0 +1,111 @@
+SmartWardrobe 电机速度和容差调试说明
+
+1. 取衣服 / 放衣服默认速度和容差位置
+
+默认参数在：
+
+SmartWardrobe/APP/Src/cmd_dispatch.c
+
+关键宏定义：
+
+#define PLACE_CLOTH_DEFAULT_RPM 150.0f
+#define PLACE_CLOTH_DEFAULT_TOL 6U
+#define TAKE_CLOTH_DEFAULT_RPM PLACE_CLOTH_DEFAULT_RPM
+#define TAKE_CLOTH_DEFAULT_TOL PLACE_CLOTH_DEFAULT_TOL
+
+含义：
+
+- PLACE_CLOTH_DEFAULT_RPM：放衣服默认速度。
+- PLACE_CLOTH_DEFAULT_TOL：放衣服默认容差。
+- TAKE_CLOTH_DEFAULT_RPM：取衣服默认速度，目前跟放衣服一致。
+- TAKE_CLOTH_DEFAULT_TOL：取衣服默认容差，目前跟放衣服一致。
+
+自动流程中的固定速度：
+
+- 命令RPM控制M1/M3/M4编码器闭环运动。
+- 放衣吸合后的M4 CCW上抬650电机步也使用命令RPM。
+- 取衣和放衣的M2普通步进动作固定10RPM，不受命令RPM影响。
+- 第一测距扫描开始速度固定75RPM，进入有效板面后固定50RPM。
+- 取衣和放衣结束时，M2通过绝对编码器回RAW=1008固定使用25RPM。
+
+2. 容差单位
+
+TOL 的单位是编码器计数，不是毫米，也不是步进脉冲。
+
+当前文档记录：
+
+720 count 约等于 10 cm。
+36 count 约等于 5 mm。
+
+所以：
+
+- TOL 越小，到位要求越严格，但更容易因为机械误差、抖动或编码器误差导致动作失败。
+- TOL 越大，到位更容易通过，但定位精度会下降。
+
+3. 临时调试方式
+
+如果通过 STM32 文本串口调试，可以直接传 RPM 和 TOL：
+
+AXIS PLACE_CLOTH RPM=10 TOL=6 SLOT=1
+AXIS TAKE_CLOTH RPM=10 TOL=6 SLOT=1
+
+这只影响本次命令，不会修改代码里的默认值。
+
+4. 云端触发时的情况
+
+当前云端到 ESP32 的协议是：
+
+放衣服：
+{"cmd":16,"position":1}
+
+取衣服：
+{"cmd":17,"position":1}
+
+读状态：
+{"cmd":32}
+
+当前云端协议没有携带 RPM 和 TOL 字段，所以云端触发取衣服或放衣服时，会使用 STM32 代码里的默认值：
+
+PLACE_CLOTH_DEFAULT_RPM
+PLACE_CLOTH_DEFAULT_TOL
+TAKE_CLOTH_DEFAULT_RPM
+TAKE_CLOTH_DEFAULT_TOL
+
+5. 阿里云 OpenAPI MessageContent
+
+阿里云 OpenAPI 的 MessageContent 要填 JSON 字符串的 Base64，不是 UART 十六进制。
+
+放衣服 1 号位：
+
+原始 JSON：
+{"cmd":16,"position":1}
+
+MessageContent：
+eyJjbWQiOjE2LCJwb3NpdGlvbiI6MX0=
+
+取衣服 1 号位：
+
+原始 JSON：
+{"cmd":17,"position":1}
+
+MessageContent：
+eyJjbWQiOjE3LCJwb3NpdGlvbiI6MX0=
+
+读状态：
+
+原始 JSON：
+{"cmd":32}
+
+MessageContent：
+eyJjbWQiOjMyfQ==
+
+6. 如果想让云端也能调速度和容差
+
+需要同时扩展 ESP32 和 STM32 的协议：
+
+- ESP32 需要从 MQTT JSON 中解析 rpm 和 tol。
+- ESP32 需要把 rpm 和 tol 打包进 UART 二进制帧。
+- STM32 需要扩展 0x10 / 0x11 帧的数据结构，并在 Wardrobe_StartClothAction 中写入 ParsedCmd_t 的参数。
+- 协议文档需要同步更新。
+
+当前最简单、最稳妥的做法是先改 STM32 代码里的默认宏。

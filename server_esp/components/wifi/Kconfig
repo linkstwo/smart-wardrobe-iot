@@ -1,0 +1,98 @@
+menu "WiFi Component Configuration"
+
+    # WiFi 组件配置项：
+    # STA 模式用于连接路由器并访问阿里云 MQTT；AP 模式用于设备自己开热点。
+    # 修改 SSID/密码后需要重新编译或通过 menuconfig 生成新的 sdkconfig。
+
+    config WIFI_STA_SSID
+        string "Station Mode SSID"
+        default "Zqbkami"
+        help
+            ESP32 作为 STA 连接的路由器 WiFi 名称。
+            SSID of the WiFi network to connect to in station mode.
+
+    config WIFI_STA_PASSWORD
+        string "Station Mode Password"
+        default "2396487484"
+        help
+            ESP32 作为 STA 连接路由器时使用的 WiFi 密码。
+            Password for the WiFi network in station mode.
+
+    config WIFI_STA_SCAN_METHOD
+        int "Station Scan Method"
+        default 0
+        range 0 1
+        help
+            STA 扫描方式：0 扫描全部信道，1 找到匹配 SSID 后快速停止。
+            WiFi scan method for station mode.
+            0: WIFI_ALL_CHANNEL_SCAN (scan all channels)
+            1: WIFI_FAST_SCAN (stop on first matching SSID)
+
+    config WIFI_STA_SORT_METHOD
+        int "Station Sort Method"
+        default 0
+        range 0 1
+        help
+            多个同名 AP 时的选择方式：按信号强度或安全等级排序。
+            Sort method for AP selection in station mode.
+            0: WIFI_CONNECT_AP_BY_SIGNAL (by signal strength)
+            1: WIFI_CONNECT_AP_BY_SECURITY (by security level)
+
+    config WIFI_STA_RSSI_THRESHOLD
+        int "Station RSSI Threshold (dBm)"
+        default -127
+        range -127 0
+        help
+            STA 连接时允许的最低 RSSI，-127 表示不限制信号强度。
+            Minimum RSSI threshold for AP connection in station mode.
+            -127 means accept any signal strength.
+
+    config WIFI_AP_SSID
+        string "Access Point SSID"
+        default "ESP32_AP"
+        help
+            ESP32 作为 AP 热点时广播的 WiFi 名称。
+            SSID for the ESP32 when operating in Access Point mode.
+
+    config WIFI_AP_PASSWORD
+        string "Access Point Password"
+        default "12345678"
+        help
+            ESP32 AP 热点密码，WPA2-PSK 要求至少 8 个字符。
+            Password for the ESP32 when operating in Access Point mode.
+            Must be at least 8 characters for WPA2-PSK.
+
+    config WIFI_AP_CHANNEL
+        int "Access Point Channel"
+        default 1
+        range 1 13
+        help
+            ESP32 AP 热点信道。
+            WiFi channel for Access Point mode.
+
+    config WIFI_AP_MAX_CONN
+        int "Access Point Maximum Connections"
+        default 4
+        range 1 10
+        help
+            AP 模式允许同时连接的最大客户端数量。
+            Maximum number of simultaneous station connections
+            in Access Point mode.
+
+    config WIFI_AP_BEACON_INTERVAL
+        int "Access Point Beacon Interval (ms)"
+        default 100
+        range 100 1000
+        help
+            AP 信标间隔，单位 ms。
+            Beacon interval in milliseconds for Access Point mode.
+
+    config WIFI_MAX_RETRY_COUNT
+        int "Maximum Connection Retry Count"
+        default 5
+        range 1 20
+        help
+            STA 连接失败后的最大重试次数。
+            Maximum number of reconnection attempts before giving up.
+
+endmenu

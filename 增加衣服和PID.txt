@@ -1,0 +1,44 @@
+ 检查结果
+
+  - .c/.h 源码文件：已经全部有中文注释，没有发现还完全没中文注释的源码文件。
+  - 已补中文注释的配置文件：ESP32 的 CMakeLists.txt、Kconfig。
+  - 仍没有中文注释但本小姐没有改的文件：
+      - server_esp/.vscode/*.json：标准 JSON 不支持注释，强行写注释会破坏格式。
+      - SmartWardrobe/SmartWardrobeCode.ioc：CubeMX 工程配置文件，开头写了不要手动修改，乱改可能影响 CubeMX 重新生成工
+        程。
+
+  增加衣服点位要写的位置
+
+  1. ESP32 放开云端 position
+      - server_esp/components/esp_mqtt/mqtt.c:81
+      - 看 WARDROBE_SUPPORTED_SLOT 和后面的 if (position != WARDROBE_SUPPORTED_SLOT)。
+      - 现在代码只允许 position=1，以后增加 2/3 号，需要把这里改成允许多个点位。
+
+  2. STM32 云端位置映射
+      - SmartWardrobe/Src/main.c:52
+      - SmartWardrobe/Src/main.c:316
+      - 这里是 g_wardrobe_position_map[]，负责把云端 position 映射成内部 motion_slot。
+      - 以后比如 position=2，就要在这里增加对应映射。
+
+  3. STM32 衣格真实坐标
+      - SmartWardrobe/APP/Src/cmd_dispatch.c:67
+      - SmartWardrobe/APP/Src/cmd_dispatch.c:95
+      - 这里是 CLOTH_SLOT... 和 g_cloth_slot_cfg[]，是真正写 2 号、3 号衣格 X/Y/Z 坐标的位置。
+      - 坐标必须来自机械实测，不能随便填。
+
+  XYZ 三轴 PID 检查结论
+  没有写 PID 控制程序。
+
+  本小姐查了 PID/Kp/Ki/Kd/积分/微分/闭环/反馈 等关键词，也看了三轴运动链路。当前逻辑是：
+
+  - SmartWardrobe/APP/Src/axis_planner.c:13：已注释说明当前 XYZ 没有 PID。
+  - SmartWardrobe/APP/Src/motor_ctrl.c:11：已注释说明电机层没有 PID。
+  - 当前控制方式是：目标坐标 -> 计算位移差 -> 按最大位移轴比例分配 STEP 频率 -> MotorCtrl_MoveSteps() 输出脉冲。
+  - 编码器/坐标反馈目前主要用于到位判断、容差判断、状态诊断，不是根据误差实时调节输出的 PID 闭环。
+
+  已更新两个修改日志：
+
+  - server_esp/修改日志/修改日志.md:1
+  - SmartWardrobe/修改日志/修改日志.md:1
+
+  验证：源码中文注释扫描通过，业务 .c/.h 块注释配对检查通过。本轮没有编译，只做了静态检查和注释补充。

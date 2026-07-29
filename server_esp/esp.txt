@@ -1,0 +1,276 @@
+ESP32-S3 智能衣柜联调对话记录
+记录日期：2026-06-17
+
+一、项目功能确认
+
+用户最开始询问当前 ESP32-S3 程序的功能是否和协议文件一致。
+
+本小姐检查后确认：
+1. 当前工程是 ESP32-S3 固件工程。
+2. 启动后启用 UART、WiFi、MQTT。
+3. WiFi 工作在 STA 模式，连接路由器。
+4. MQTT 连接阿里云 IoT Broker，端口 1883，未启用 SSL。
+5. 原程序订阅 `esp32/move`。
+6. 原程序收到 `{"command":"up"}` 这类 JSON 后，通过 UART 发送字符串 `up/down/left/right/forward/backward`。
+7. 原程序 UART 上行只识别 `clothing_taken_success`、`clothing_released_success`、`clothing_taken_failure`、`clothing_released_failure` 这类字符串。
+
+用户随后提供 `协议.md`，询问代码和协议是否一致。
+
+本小姐对照 `docs/协议.md` 后确认：
+1. 协议要求服务器和 ESP32 之间使用 MQTT。
+2. 协议要求 ESP32 和 STM32 之间使用 UART 二进制帧。
+3. UART 帧格式为 `A5 CMD LEN DATA CRC 5A`。
+4. `0x10` 表示存衣服。
+5. `0x11` 表示取衣服。
+6. `0x20` 表示读状态。
+7. `0x90` 表示操作成功。
+8. `0x91` 表示故障异常。
+9. `0xA0` 表示状态上报。
+
+结论：
+原代码和 `协议.md` 的具体业务协议不一致。原代码是移动方向字符串协议，协议文件是智能衣柜二进制帧协议。
+
+二、取衣服命令格式确认
+
+用户问：
+如果服务器发送取衣服命令，ESP32 收到后通过串口发给单片机，那么串口发送的数据是什么？
+
+本小姐说明：
+如果按 `协议.md`，取衣服不是发送字符串，而是发送二进制帧：
+
+取 5 号格衣服：
+`A5 11 01 05 15 5A`
+
+字段含义：
+1. `A5`：帧头。
+2. `11`：取衣服命令。
+3. `01`：数据长度。
+4. `05`：位置编号。
+5. `15`：CRC，计算方式为 `0x11 ^ 0x01 ^ 0x05 = 0x15`。
+6. `5A`：帧尾。
+
+注意：
+最开始本小姐曾错误说过 CRC 是 `0x17`，后来通过实际日志和重新计算纠正，正确值是 `0x15`。
+
+三、将代码改成协议一致
+
+用户要求：
+“你现在就把这个改成和协议一样的。”
+
+本小姐修改了工程：
+1. MQTT 下行不再使用 `esp32/move`。
+2. MQTT 下行命令从 `{"command":"up"}` 改为 `{"cmd":17,"position":5}`。
+3. ESP32 收到 MQTT 命令后生成 UART 二进制帧。
+4. UART 下发帧格式为 `A5 CMD LEN DATA CRC 5A`。
+5. UART 上行解析 STM32 的 `0x90`、`0x91`、`0xA0` 帧。
+6. ESP32 将 STM32 上行结果转成 JSON 并通过 MQTT 上报。
+7. 关闭 UART 旧的 `OK\n` 自动 ACK，避免污染二进制帧协议。
+
+涉及文件包括：
+1. `app/app_init.c`
+2. `components/esp_mqtt/mqtt.c`
+3. `components/esp_mqtt/include/mqtt.h`
+4. `components/uart/uart.c`
+5. `components/uart/include/uart.h`
+6. `components/uart/Kconfig`
+7. `components/uart/include/uart_config.h`
+8. `sdkconfig`
+9. `docs/README.md`
+10. `修改日志/修改日志.md`
+
+构建验证：
+使用 ESP-IDF v5.3.5 执行 `idf.py build`，结果为 `Project build complete`。
+
+四、阿里云 Topic 对齐
+
+用户提供阿里云控制台截图，显示自定义 Topic：
+`/k1vtgAzED8C/${deviceName}/user/wardrobe`
+
+本小姐判断：
+代码中原先使用的 `wardrobe/command` 和阿里云真实 Topic 不一致。
+
+设备信息：
+1. ProductKey：`k1vtgAzED8C`
+2. DeviceName：`7Rzu9Cy7Ze6Yhe1YcMjQ`
+3. IotInstanceId：`iot-06z00dgi0u8jci8`
+
+实际设备 Topic：
+`/k1vtgAzED8C/7Rzu9Cy7Ze6Yhe1YcMjQ/user/wardrobe`
+
+本小姐继续修改：
+1. 将 MQTT 订阅 Topic 改为 `/k1vtgAzED8C/7Rzu9Cy7Ze6Yhe1YcMjQ/user/wardrobe`。
+2. 将 MQTT 发布 Topic 也改为同一个 Topic。
+3. 增加 `status` 字段过滤，避免 ESP32 收到自己发布的响应后再次处理。
+4. 修正 `mqtt_config.h` 中备用 `CONFIG_MQTT_CLIENT_ID`，补全 `ProductKey.DeviceName` 前缀。
+5. 同步更新 `docs/README.md` 和修改日志。
+
+再次构建验证：
+`idf.py build` 通过，输出 `Project build complete`。
+
+五、阿里云控制台页面解释
+
+用户询问为什么设备详情里的“已订阅 Topic 列表”为空，而产品的 Topic 类列表里有自定义 Topic。
+
+本小姐解释：
+1. 产品页面的 `Topic 类列表` 是 Topic 模板定义，不是设备实时订阅状态。
+2. 设备详情里的已订阅 Topic 列表不一定实时显示自定义 MQTT 订阅。
+3. 以 ESP32 日志为准。
+
+ESP32 日志显示：
+`MQTT connected to broker`
+`Subscribed to topic: /k1vtgAzED8C/7Rzu9Cy7Ze6Yhe1YcMjQ/user/wardrobe`
+
+结论：
+ESP32 已经成功连接阿里云并订阅真实 Topic。
+
+六、消息解析页面解释
+
+用户打开阿里云“消息解析”页面，询问是否因为脚本没有写所以收不到消息。
+
+本小姐解释：
+1. 如果通过自定义 Topic 直接发布原始 JSON，通常不需要写消息解析脚本。
+2. 消息解析脚本主要用于物模型/Alink 与自定义 rawData 之间转换。
+3. 如果走物模型下发，则 `protocolToRawData()` 不能返回空数组。
+4. 当前 ESP32 代码期望直接收到 JSON 字符串，例如 `{"cmd":17,"position":5}`。
+
+七、在线调试页面解释
+
+用户打开“监控运维 -> 在线调试 -> 属性调试”，发现不能选择 Topic。
+
+本小姐解释：
+1. 该页面用于物模型属性调试，不是自定义 Topic 发布入口。
+2. 产品页面的“发布”按钮是发布产品状态，不是 MQTT publish。
+3. 当前最直接的测试方式是用阿里云 OpenAPI Explorer 的 `Pub` 接口向自定义 Topic 发布消息。
+
+八、OpenAPI Explorer 使用方式
+
+本小姐指导用户使用 OpenAPI Explorer：
+接口选择：
+物联网平台 `Pub`
+
+地域：
+华东2（上海）
+
+参数：
+1. `IotInstanceId`: `iot-06z00dgi0u8jci8`
+2. `ProductKey`: `k1vtgAzED8C`
+3. `TopicFullName`: `/k1vtgAzED8C/7Rzu9Cy7Ze6Yhe1YcMjQ/user/wardrobe`
+4. `MessageContent`: `eyJjbWQiOjE3LCJwb3NpdGlvbiI6NX0=`
+5. `Qos`: `1`
+
+其中：
+`eyJjbWQiOjE3LCJwb3NpdGlvbiI6NX0=`
+是 JSON `{"cmd":17,"position":5}` 的 Base64。
+
+其他命令：
+1. 存 3 号格：`{"cmd":16,"position":3}`，Base64 为 `eyJjbWQiOjE2LCJwb3NpdGlvbiI6M30=`
+2. 读状态：`{"cmd":32}`，Base64 为 `eyJjbWQiOjMyfQ==`
+
+用户曾遇到错误：
+`iot.prod.InvalidFormattedProductkey`
+
+本小姐判断：
+1. 可能是 ProductKey 填错。
+2. 也可能是没有填 `IotInstanceId`。
+3. ProductKey 不要填实例 ID，不要填完整 Topic，不要带 `/`。
+
+九、OpenAPI 调用成功后的日志
+
+用户最终成功通过 OpenAPI Pub 下发消息，ESP32 日志显示：
+
+`MQTT data received: topic=/k1vtgAzED8C/7Rzu9Cy7Ze6Yhe1YcMjQ/user/wardrobe, data_len=23`
+`Wardrobe command received: {"cmd":17,"position":5}`
+`Writing wardrobe frame to UART port 0: cmd=0x11, len=1`
+`a5 11 01 05 15 5a`
+`UART TX done, port_id=0`
+`UART wardrobe frame write success`
+
+本小姐确认：
+1. 阿里云 Pub 到 ESP32 的 MQTT 链路已经成功。
+2. ESP32 已经解析 JSON。
+3. ESP32 已经通过 UART1 发出二进制帧。
+4. 发送帧 `A5 11 01 05 15 5A` 是正确的取 5 号格命令。
+
+十、UART 与 STM32 接线说明
+
+用户询问 VSCode 里看不到 UART 发给 STM32 的数据，是不是需要再接串口。
+
+本小姐说明：
+1. VSCode 监视的 COM19 是 ESP32 的 USB 下载/日志串口。
+2. ESP32 发给 STM32 使用的是硬件 UART1。
+3. UART1 TX 引脚是 GPIO17。
+4. UART1 RX 引脚是 GPIO18。
+5. 波特率是 115200。
+6. 数据格式为 8N1。
+
+如果接 USB-TTL 调试：
+1. ESP32 GPIO17 TX 接 USB-TTL RX。
+2. ESP32 GPIO18 RX 接 USB-TTL TX。
+3. ESP32 GND 接 USB-TTL GND。
+4. 串口助手使用 115200、8N1、HEX 显示。
+
+如果接 STM32：
+1. ESP32 GPIO17 TX 接 STM32 RX。
+2. ESP32 GPIO18 RX 接 STM32 TX。
+3. GND 共地。
+
+十一、UART RX 杂乱数据解释
+
+用户看到大量 UART RX 数据，例如：
+`40 c5 ff df`
+`a1 00 00`
+`54 00 bd`
+
+本小姐解释：
+这些不是阿里云 MQTT 数据，而是 ESP32 的 UART1 RX 引脚收到的字节。
+
+常见原因：
+1. GPIO18 悬空。
+2. STM32 未接好 GND。
+3. STM32 波特率不匹配。
+4. TX/RX 接反。
+5. 线缆干扰。
+6. STM32 正在发送其他非协议数据。
+
+ESP32 期望 STM32 上行帧必须以 `A5` 开头，并符合：
+`A5 CMD LEN DATA CRC 5A`
+
+十二、STM32 上报到阿里云
+
+用户问：
+以后直接接 STM32，STM32 单片机会发送数据到 ESP32，ESP32 要传数据到阿里云那里显示，这个可以显示吗？
+
+本小姐回答：
+可以，但 STM32 必须按协议发二进制帧。
+
+ESP32 当前支持 STM32 上行：
+1. `0x90` 操作成功。
+2. `0x91` 故障异常。
+3. `0xA0` 状态上报。
+
+成功示例：
+`A5 90 01 05 94 5A`
+
+ESP32 会转换成类似：
+`{"status":144,"action":17,"position":5,"timestamp":123456}`
+
+并发布到：
+`/k1vtgAzED8C/7Rzu9Cy7Ze6Yhe1YcMjQ/user/wardrobe`
+
+说明：
+1. 阿里云可以收到。
+2. 在日志服务里可以看到。
+3. 但不会自动显示到属性调试页面。
+4. 如果要在属性页面显示，需要走物模型或消息解析。
+
+十三、当前最终状态
+
+当前链路状态：
+1. ESP32 可以连接 WiFi。
+2. ESP32 可以连接阿里云 IoT MQTT Broker。
+3. ESP32 可以订阅阿里云自定义 Topic。
+4. 阿里云 OpenAPI Pub 可以发送 JSON 命令到 ESP32。
+5. ESP32 可以将 `{"cmd":17,"position":5}` 转成 UART 帧。
+6. ESP32 发出的取衣服 UART 帧为 `A5 11 01 05 15 5A`。
+7. 下一步应接 STM32，确认 STM32 能收到该帧并按协议返回 `0x90`、`0x91` 或 `0xA0` 帧。
+

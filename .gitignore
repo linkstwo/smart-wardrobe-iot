@@ -1,0 +1,23 @@
+# ESP-IDF build output
+server_esp/build*/
+server_esp/.cache/
+server_esp/.git-inner-backup/
+server_esp/sdkconfig
+server_esp/firmware_cloud/
+
+# Keil build output and user-specific state
+SmartWardrobe/MDK-ARM/SmartWardrobeCode/
+SmartWardrobe/MDK-ARM/*.uvguix.*
+SmartWardrobe/MDK-ARM/*.uvoptx
+SmartWardrobe/MDK-ARM/*.log
+
+# IDE and editor state
+.idea/
+*.iml
+
+# Local environment files
+*.env
+
+# Operating system files
+.DS_Store
+Thumbs.db

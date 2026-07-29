@@ -1,0 +1,113 @@
+menu "MQTT Component Configuration"
+
+    # MQTT 组件配置项：
+    # 这里保存阿里云 MQTT 连接参数、事件任务参数、Topic/Payload 长度和 TLS 开关。
+    # 修改前要确认阿里云产品 ProductKey、DeviceName、ClientId、Username、Password 是否匹配。
+
+    config MQTT_BROKER_HOST
+        string "MQTT Broker Host"
+        default "iot-06z00dgi0u8jci8.mqtt.iothub.aliyuncs.com"
+        help
+            阿里云 MQTT Broker 地址，ESP32 连接云端时使用。
+            Hostname or IP address of the MQTT broker.
+            Example: broker.example.com or 192.168.1.100
+
+    config MQTT_BROKER_PORT
+        int "MQTT Broker Port"
+        default 1883
+        range 1 65535
+        help
+            MQTT 端口号。当前默认 1883，表示普通 TCP MQTT。
+            Port number of the MQTT broker.
+            Default: 1883 for standard MQTT.
+
+    config MQTT_CLIENT_ID
+        string "MQTT Client ID"
+        default "k1vtgAzED8C.7Rzu9Cy7Ze6Yhe1YcMjQ|securemode=2,signmethod=hmacsha256,timestamp=1781099957494|"
+        help
+            阿里云设备连接用 Client ID，必须和设备三元组及签名参数对应。
+            Client identifier for MQTT connection.
+            Must be unique per client connected to the broker.
+
+    config MQTT_USERNAME
+        string "MQTT Username"
+        default "7Rzu9Cy7Ze6Yhe1YcMjQ&k1vtgAzED8C"
+        help
+            阿里云 MQTT 用户名，一般格式为 DeviceName&ProductKey。
+            Username for MQTT broker authentication.
+            Leave empty if no authentication required.
+
+    config MQTT_PASSWORD
+        string "MQTT Password"
+        default "9d8a5497902d72cc11704e2df41983c445d4e25e8438fcb645f2725b330e0627"
+        help
+            阿里云 MQTT 密码/签名值，设备三元组或时间戳变化后需要重新生成。
+            Password for MQTT broker authentication.
+            Leave empty if no authentication required.
+
+    config MQTT_KEEPALIVE_SEC
+        int "MQTT Keep Alive (seconds)"
+        default 60
+        range 10 3600
+        help
+            MQTT 心跳保活时间，网络不稳定时可适当调整。
+            MQTT keep alive interval in seconds.
+
+    config ESP_MQTT_EVT_TASK_STACK_SIZE
+        int "MQTT Event Task Stack Size"
+        default 8192
+        range 4096 32768
+        help
+            MQTT 事件任务栈大小，JSON 解析和日志较多时不能太小。
+            Stack size for the MQTT event processing task.
+
+    config ESP_MQTT_EVT_TASK_PRIORITY
+        int "MQTT Event Task Priority"
+        default 5
+        range 1 24
+        help
+            MQTT 事件任务优先级，影响消息处理及时性。
+            Priority of the MQTT event processing task.
+
+    config MQTT_MAX_TOPIC_LEN
+        int "Maximum Topic Length"
+        default 128
+        range 32 512
+        help
+            MQTT Topic 最大长度，阿里云自定义 Topic 较长时需要保证这里足够。
+            Maximum length of MQTT topics.
+
+    config MQTT_MAX_PAYLOAD_LEN
+        int "Maximum Payload Length"
+        default 4096
+        range 512 16384
+        help
+            MQTT Payload 最大长度，衣柜命令 JSON 很短，状态或扩展消息可按需增大。
+            Maximum length of MQTT payloads.
+
+    config MQTT_RECONNECT_INTERVAL_MS
+        int "Reconnect Interval (ms)"
+        default 5000
+        range 1000 60000
+        help
+            MQTT 断线重连间隔，单位 ms。
+            Interval between reconnection attempts in milliseconds.
+
+    config MQTT_ENABLE_SSL
+        bool "Enable MQTT over SSL/TLS"
+        default n
+        help
+            是否启用 TLS。当前默认关闭，启用后需要配置 Broker 证书。
+            Enable secure MQTT connection using TLS/SSL.
+            Requires broker certificate configuration.
+
+    config MQTT_BROKER_CERT
+        string "Broker Certificate (PEM format)"
+        default ""
+        depends on MQTT_ENABLE_SSL
+        help
+            TLS 模式下使用的 Broker PEM 证书。
+            Broker certificate in PEM format for secure MQTT.
+            Required for MQTT over SSL/TLS.
+
+endmenu

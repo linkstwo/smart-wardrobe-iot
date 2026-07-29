@@ -1,0 +1,383 @@
+ 阿里云 Pub
+  发送 Base64(JSON)
+          ↓
+  ESP32 收到 MQTT 消息
+  解析 JSON 里的 cmd 和 position
+          ↓
+  ESP32 通过 UART 发二进制帧给 STM32
+          ↓
+  STM32 收到帧
+  根据 position 找对应衣格坐标
+          ↓
+  执行放衣服 / 取衣服动作
+          ↓
+  STM32 回传结果给 ESP32
+          ↓
+  ESP32 再通过 MQTT 上报到阿里云
+
+  ## 1. 阿里云 Pub 发送什么
+
+  你截图里这个页面是阿里云 OpenAPI 的 Pub 接口。关键参数这样填：
+
+  ProductKey:
+  k1vtgAzED8C
+
+  TopicFullName:
+  /k1vtgAzED8C/7Rzu9Cy7Ze6Yhe1YcMjQ/user/wardrobe
+
+  MessageContent:
+  填 Base64 后的 JSON 字符串
+
+  MessageContent 不能直接填：
+
+  {"cmd":17,"position":1}
+
+  而是要填它的 Base64：
+
+  eyJjbWQiOjE3LCJwb3NpdGlvbiI6MX0=
+
+  命令表：
+
+  cmd=16 表示存衣服
+  cmd=17 表示取衣服
+  cmd=18 表示回零
+  cmd=32 表示读状态
+  position 表示第几个衣服位置
+
+  所以你要发这些：
+
+  存 1 号位置：
+  JSON: {"cmd":16,"position":1}
+  MessageContent: eyJjbWQiOjE2LCJwb3NpdGlvbiI6MX0=
+
+  取 1 号位置：
+  JSON: {"cmd":17,"position":1}
+  MessageContent: eyJjbWQiOjE3LCJwb3NpdGlvbiI6MX0=
+
+  存 2 号位置：
+  JSON: {"cmd":16,"position":2}
+  MessageContent: eyJjbWQiOjE2LCJwb3NpdGlvbiI6Mn0=
+
+  取 2 号位置：
+  JSON: {"cmd":17,"position":2}
+  MessageContent: eyJjbWQiOjE3LCJwb3NpdGlvbiI6Mn0=
+
+  存 3 号位置：
+  JSON: {"cmd":16,"position":3}
+  MessageContent: eyJjbWQiOjE2LCJwb3NpdGlvbiI6M30=
+
+  取 3 号位置：
+  JSON: {"cmd":17,"position":3}
+  MessageContent: eyJjbWQiOjE3LCJwb3NpdGlvbiI6M30=
+
+  回零：
+  JSON: {"cmd":18}
+  MessageContent: eyJjbWQiOjE4fQ==
+
+  读状态：
+  JSON: {"cmd":32}
+  MessageContent: eyJjbWQiOjMyfQ==
+
+  ## 2. ESP32 现在为什么只支持 1 号
+
+  ESP32 限制在这个文件：
+
+  /C:/Users/a1931/Desktop/SmartWardrobe(4)/Sum/Sum/server_esp/components/esp_mqtt/mqtt.c:46
+
+  现在代码里有：
+
+  #define WARDROBE_SUPPORTED_SLOT       1
+
+  然后这里会判断：
+
+  /C:/Users/a1931/Desktop/SmartWardrobe(4)/Sum/Sum/server_esp/components/esp_mqtt/mqtt.c:599
+
+  if (position != WARDROBE_SUPPORTED_SLOT) {
+      cJSON_Delete(root);
+      return wardrobe_publish_fault(WARDROBE_FAULT_UNKNOWN,
+                                    "unsupported_position", position);
+  }
+
+  这段意思是：只要你发的 position 不是 1，ESP32 就直接返回 unsupported_position，不会发给 STM32。
+
+  如果要支持 1、2、3 号，ESP32 这里应改成：
+
+  #define WARDROBE_SLOT_MIN             1
+  #define WARDROBE_SLOT_MAX             3
+
+  然后把判断改成：
+
+  if (position < WARDROBE_SLOT_MIN || position > WARDROBE_SLOT_MAX) {
+      cJSON_Delete(root);
+      return wardrobe_publish_fault(WARDROBE_FAULT_UNKNOWN,
+                                    "unsupported_position", position);
+  }
+
+  这样 ESP32 就允许 position=1、position=2、position=3 通过。
+
+  ## 3. ESP32 发给 STM32 的数据是什么
+
+  ESP32 收到阿里云 JSON 后，会转成 UART 二进制帧。
+
+  帧格式固定是：
+
+  A5 CMD LEN DATA CRC 5A
+
+  校验规则：
+
+  CRC = CMD ^ LEN ^ DATA
+
+  具体例子：
+
+  存 1 号：
+  JSON: {"cmd":16,"position":1}
+  UART: A5 10 01 01 10 5A
+
+  取 1 号：
+  JSON: {"cmd":17,"position":1}
+  UART: A5 11 01 01 11 5A
+
+  存 2 号：
+  JSON: {"cmd":16,"position":2}
+  UART: A5 10 01 02 13 5A
+
+  取 2 号：
+  JSON: {"cmd":17,"position":2}
+  UART: A5 11 01 02 12 5A
+
+  存 3 号：
+  JSON: {"cmd":16,"position":3}
+  UART: A5 10 01 03 12 5A
+
+  取 3 号：
+  JSON: {"cmd":17,"position":3}
+  UART: A5 11 01 03 13 5A
+
+  回零：
+  JSON: {"cmd":18}
+  UART: A5 12 00 12 5A
+
+  读状态：
+  JSON: {"cmd":32}
+  UART: A5 20 00 20 5A
+
+  这里 10 是十六进制 0x10，表示存衣服；11 是十六进制 0x11，表示取衣服。
+
+  ## 4. STM32 现在为什么也只真正有 1 号
+
+  STM32 这边有两层：
+
+  第一层：阿里云传来的 position 映射到内部 motion_slot。
+
+  位置在：
+
+  /C:/Users/a1931/Desktop/SmartWardrobe(4)/Sum/Sum/SmartWardrobe/Src/main.c:290
+
+  现在是：
+
+  #define WARDROBE_MOTION_SLOT_1 1U
+
+  static const WardrobePositionMap_t g_wardrobe_position_map[] = {
+    { 1U, WARDROBE_MOTION_SLOT_1 },
+    { 5U, WARDROBE_MOTION_SLOT_1 }
+  };
+
+  这表示：外部发 position=1 会走内部 1 号动作槽位；外部发 position=5 也临时走内部 1 号动作槽位。
+
+  第二层：内部动作槽位对应真实机械坐标。
+
+  位置在：
+
+  /C:/Users/a1931/Desktop/SmartWardrobe(4)/Sum/Sum/SmartWardrobe/APP/Src/cmd_dispatch.c:64
+
+  现在是：
+
+  #define PLACE_CLOTH_HANG_X 13000L
+  #define PLACE_CLOTH_HANG_Y 3100L
+  #define PLACE_CLOTH_HANG_Z 2450L
+  #define CLOTH_SLOT_DEFAULT 1U
+  #define CLOTH_SLOT1_ID 1U
+
+  static const ClothSlotConfig_t g_cloth_slot_cfg[] = {
+      { CLOTH_SLOT1_ID, PLACE_CLOTH_HANG_X, PLACE_CLOTH_HANG_Y, PLACE_CLOTH_HANG_Z }
+  };
+
+  也就是说，真正有坐标的只有 1 号：
+
+  1 号衣服位：
+  X=13000
+  Y=3100
+  Z=2450
+
+  你的文档里还写过 Z=2436，代码里是 2450，这个需要以后统一确认。现在以实际代码为准是 2450。
+
+  ## 5. STM32 增加 2、3 号应该怎么写
+
+  第一步，在 /C:/Users/a1931/Desktop/SmartWardrobe(4)/Sum/Sum/SmartWardrobe/APP/Src/cmd_dispatch.c:43 附近增加 2、3 号坐
+  标。
+
+  注意：下面的 13200、3350、2450、13400、3600、2450 只是示范格式，不是本小姐替你确认过的机械坐标。真实数值必须你实测后填
+  进去，否则机械臂可能撞机。
+
+  #define PLACE_CLOTH_HANG_X 13000L
+  #define PLACE_CLOTH_HANG_Y 3100L
+  #define PLACE_CLOTH_HANG_Z 2450L
+
+  #define PLACE_CLOTH_HANG2_X 13200L
+  #define PLACE_CLOTH_HANG2_Y 3350L
+  #define PLACE_CLOTH_HANG2_Z 2450L
+
+  #define PLACE_CLOTH_HANG3_X 13400L
+  #define PLACE_CLOTH_HANG3_Y 3600L
+  #define PLACE_CLOTH_HANG3_Z 2450L
+
+  #define CLOTH_SLOT_DEFAULT 1U
+  #define CLOTH_SLOT1_ID 1U
+  #define CLOTH_SLOT2_ID 2U
+  #define CLOTH_SLOT3_ID 3U
+
+  然后把原来的：
+
+  static const ClothSlotConfig_t g_cloth_slot_cfg[] = {
+      { CLOTH_SLOT1_ID, PLACE_CLOTH_HANG_X, PLACE_CLOTH_HANG_Y, PLACE_CLOTH_HANG_Z }
+  };
+
+  改成：
+
+  static const ClothSlotConfig_t g_cloth_slot_cfg[] = {
+      { CLOTH_SLOT1_ID, PLACE_CLOTH_HANG_X,  PLACE_CLOTH_HANG_Y,  PLACE_CLOTH_HANG_Z  },
+      { CLOTH_SLOT2_ID, PLACE_CLOTH_HANG2_X, PLACE_CLOTH_HANG2_Y, PLACE_CLOTH_HANG2_Z },
+      { CLOTH_SLOT3_ID, PLACE_CLOTH_HANG3_X, PLACE_CLOTH_HANG3_Y, PLACE_CLOTH_HANG3_Z }
+  };
+
+  第二步，在 /C:/Users/a1931/Desktop/SmartWardrobe(4)/Sum/Sum/SmartWardrobe/Src/main.c:36 附近增加槽位宏：
+
+  #define WARDROBE_MOTION_SLOT_1 1U
+  #define WARDROBE_MOTION_SLOT_2 2U
+  #define WARDROBE_MOTION_SLOT_3 3U
+
+  然后把：
+
+  static const WardrobePositionMap_t g_wardrobe_position_map[] = {
+    { 1U, WARDROBE_MOTION_SLOT_1 },
+    { 5U, WARDROBE_MOTION_SLOT_1 }
+  };
+
+  改成：
+
+  static const WardrobePositionMap_t g_wardrobe_position_map[] = {
+    { 1U, WARDROBE_MOTION_SLOT_1 },
+    { 2U, WARDROBE_MOTION_SLOT_2 },
+    { 3U, WARDROBE_MOTION_SLOT_3 }
+  };
+
+  这样 STM32 收到：
+
+  position=2
+
+  就会执行内部 2 号槽位坐标。
+
+  ## 6. 你应该怎么测 2、3 号坐标
+
+  不能靠猜。正确流程是：
+
+  1. 先让机器回零：
+
+  ALL HOME RPM=120
+
+  2. 查询当前位置：
+
+  AXIS STATUS
+
+  3. 低速移动到 2 号衣服位的挂衣位置，例如先用小步测试：
+
+  AXIS ENC_MOVE X=13000 Y=3100 Z=2450 RPM=20 TOL=36
+
+  4. 如果位置不对，不要直接大幅移动，逐步调整 X/Y/Z。
+
+  例如 X 方向微调：
+
+  AXIS ENC_MOVE X=13200 Y=3100 Z=2450 RPM=20 TOL=36
+
+  Y 方向微调：
+
+  AXIS ENC_MOVE X=13200 Y=3350 Z=2450 RPM=20 TOL=36
+
+  Z 方向微调：
+
+  AXIS ENC_MOVE X=13200 Y=3350 Z=2480 RPM=20 TOL=36
+
+  5. 到达你认为 2 号衣格正确夹取/放置位置后，记录：
+
+  2 号衣格 X=实际值
+  2 号衣格 Y=实际值
+  2 号衣格 Z=实际值
+
+  6. 用同样方法测 3 号：
+
+  3 号衣格 X=实际值
+  3 号衣格 Y=实际值
+  3 号衣格 Z=实际值
+
+  7. 再把这些实测值写进 cmd_dispatch.c。
+
+  ## 7. 加完代码后怎么验证
+
+  验证顺序不要乱：
+
+  1. 先只烧 STM32，电脑串口直接测试：
+
+  AXIS PLACE_CLOTH SLOT=1
+  AXIS TAKE_CLOTH SLOT=1
+  AXIS PLACE_CLOTH SLOT=2
+  AXIS TAKE_CLOTH SLOT=2
+  AXIS PLACE_CLOTH SLOT=3
+  AXIS TAKE_CLOTH SLOT=3
+
+  如果你的命令解析支持 SLOT=，底层代码已经有 cmd->args.slot，所以可以通过槽位测试。
+
+  2. STM32 本地测试都成功后，再接 ESP32。
+  3. 阿里云发：
+
+  取 2 号：
+  eyJjbWQiOjE3LCJwb3NpdGlvbiI6Mn0=
+
+  4. 看 ESP32 日志，应该出现类似：
+
+  Wardrobe command received: {"cmd":17,"position":2}
+  Writing wardrobe frame to UART port 0: cmd=0x11, len=1
+  UART wardrobe frame write success
+
+  5. STM32 执行动作成功后，会回：
+
+  A5 90 01 02 93 5A
+
+  6. ESP32 会上报 JSON：
+
+  {
+    "status": 144,
+    "action": 17,
+    "position": 2,
+    "timestamp": 具体时间
+  }
+
+  ## 8. 最推荐的改法
+
+  本小姐建议你按这个顺序做，别乱跳：
+
+  第一步：实测 2 号、3 号衣格坐标
+  第二步：STM32 增加 2、3 号槽位坐标
+  第三步：STM32 增加 position 到 motion_slot 的映射
+  第四步：ESP32 放开 position=1~3
+  第五步：本地串口先测 STM32
+  第六步：再用阿里云 Pub 测完整链路
+
+  如果你要本小姐直接帮你改工程代码，本小姐可以改，但你必须先给出：
+
+  2号衣格 X=
+  2号衣格 Y=
+  2号衣格 Z=
+
+  3号衣格 X=
+  3号衣格 Y=
+  3号衣格 Z=

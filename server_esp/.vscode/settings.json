@@ -1,0 +1,16 @@
+{
+  "ROS2.distro": "noetic",
+  "idf.currentSetup": "D:/esp/espidf/Espressif/frameworks/esp-idf-v5.3.5/",
+  "idf.buildPath": "${workspaceFolder}/build",
+  "idf.portWin": "COM19",
+  "idf.customExtraVars": {
+    "IDF_TARGET": "esp32s3"
+  },
+  "clangd.path": "D:\\esp\\espidf\\Espressif\\tools\\esp-clang\\16.0.1-fe4f10a809\\esp-clang\\bin\\clangd.exe",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=${workspaceFolder}/build"
+  ],
+  "idf.flashType": "UART"
+}
